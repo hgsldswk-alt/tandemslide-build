@@ -1,0 +1,138 @@
+import XCTest
+
+final class FlowUITests: XCTestCase {
+    private let app = XCUIApplication()
+    private let namespace = UUID().uuidString
+
+    override func setUp() {
+        continueAfterFailure = false
+    }
+
+    private func launch(_ fixture: String? = nil, _ extra: [String] = [], env: [String: String] = [:]) {
+        app.launchArguments = ["-ui-testing", "-reset", "-data-id", namespace, "-AppleLanguages", "(en)", "-AppleLocale", "en_US"]
+            + (fixture.map { ["-fixture", $0] } ?? []) + extra
+        app.launchEnvironment = env
+        app.launch()
+    }
+
+    private func element(_ id: String) -> XCUIElement {
+        app.descendants(matching: .any).matching(identifier: id).firstMatch
+    }
+
+    private func tap(_ id: String, file: StaticString = #filePath, line: UInt = #line) {
+        let target = element(id)
+        XCTAssertTrue(target.waitForExistence(timeout: 8), id, file: file, line: line)
+        for _ in 0..<5 where !target.isHittable { app.swipeUp() }
+        target.tap()
+    }
+
+    private func exists(_ id: String, timeout: TimeInterval = 8, file: StaticString = #filePath, line: UInt = #line) {
+        XCTAssertTrue(element(id).waitForExistence(timeout: timeout), id, file: file, line: line)
+    }
+
+    private func screenshot(_ name: String) {
+        let image = app.screenshot()
+        let attachment = XCTAttachment(screenshot: image)
+        attachment.name = name
+        attachment.lifetime = .keepAlways
+        add(attachment)
+        if let path = ProcessInfo.processInfo.environment["TEST_RUNNER_SHOTS_DIR"] ?? ProcessInfo.processInfo.environment["SHOTS_DIR"] {
+            let folder = URL(fileURLWithPath: path, isDirectory: true)
+            try? FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+            try? image.pngRepresentation.write(to: folder.appendingPathComponent(name + ".png"))
+        }
+    }
+
+    private func type(_ id: String, _ text: String) {
+        let field = element(id)
+        XCTAssertTrue(field.waitForExistence(timeout: 8), id)
+        field.tap()
+        field.typeText(text)
+    }
+
+    /// Core: type three numbers, the answer appears — no button to press.
+    func testAdviceAppearsFromThreeNumbers() {
+        launch("empty-input")
+        tap("weigh.steer")
+        app.typeText("11450")
+        app.typeText("35100")
+        app.typeText("32400")
+        let headline = element("advice.headline")
+        XCTAssertTrue(headline.waitForExistence(timeout: 6))
+        XCTAssertTrue(headline.label.contains("5 holes toward the CAB"), headline.label)
+    }
+
+    func testReweighUpdatesCalibration() {
+        launch("history")
+        tap("weigh.reweigh")
+        type("reweigh.steer", "11460")
+        type("reweigh.drive", "33800")
+        type("reweigh.trailer", "33690")
+        tap("reweigh.save")
+        exists("toast")
+        app.tabBars.buttons["History"].tap()
+        let card = element("history.calibration")
+        XCTAssertTrue(card.waitForExistence(timeout: 6))
+        XCTAssertTrue(card.label.contains("5 re-weighs"), card.label)
+    }
+
+    func testTenthLegalShowsMilestone() {
+        launch("milestone")
+        tap("weigh.reweigh")
+        type("reweigh.steer", "11460")
+        type("reweigh.drive", "33800")
+        type("reweigh.trailer", "33690")
+        tap("reweigh.save")
+        exists("milestone.share", timeout: 8)
+    }
+
+    func testAddingSecondRigNeedsUnlockAfterTrial() {
+        launch("history", ["-expired"])
+        tap("weigh.rig")
+        app.buttons["Add tractor/trailer…"].tap()
+        exists("paywall.title")
+    }
+
+    func testPasteTrailerCode() {
+        let json = #"{"trailer":"Fleet reefer","perHole":270,"perNotch":480,"holeSpacing":6,"preset":"usFederal","custom":{"steer":12000,"drive":34000,"trailer":34000,"gross":80000}}"#
+        let code = "TSC1:" + Data(json.utf8).base64EncodedString()
+            .replacingOccurrences(of: "+", with: "-").replacingOccurrences(of: "/", with: "_").replacingOccurrences(of: "=", with: "")
+        launch("history", env: ["UITEST_CODE": code])
+        app.tabBars.buttons["Rig"].tap()
+        for _ in 0..<4 where !element("rig.paste").exists { app.swipeUp() }
+        tap("rig.paste")
+        exists("toast")
+        XCTAssertTrue(element("toast").label.contains("270"))
+    }
+
+    func testStoreScreenshots() {
+        launch("history")
+        exists("advice.headline")
+        screenshot("store-en-01-weigh")
+
+        app.tabBars.buttons["History"].tap()
+        exists("history.calibration")
+        screenshot("store-en-02-history")
+
+        app.tabBars.buttons["Rig"].tap()
+        exists("rig.trailer")
+        screenshot("store-en-03-rig")
+        app.terminate()
+
+        launch("milestone")
+        tap("weigh.reweigh")
+        type("reweigh.steer", "11460")
+        type("reweigh.drive", "33800")
+        type("reweigh.trailer", "33690")
+        screenshot("store-en-05-reweigh")
+        tap("reweigh.save")
+        exists("milestone.share", timeout: 8)
+        sleep(3)
+        screenshot("store-en-04-share")
+        app.terminate()
+
+        launch("history", ["-paywall"])
+        exists("paywall.title")
+        screenshot("paid-01-paywall")
+    }
+}
